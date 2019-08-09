@@ -1,0 +1,65 @@
+#!/bin/bash
+##############################################
+# Repack and create UBI images based on
+# NAND flash memory structure of MiDrive D02
+# Tested and ran under OS (Ubuntu 18.04.2)
+#
+# Prerequisites: https://github.com/jrspruitt/ubi_reader
+#
+# @author LimeOrangePie <ji5489@gmail.com>
+# @date 2019-08-10
+# @license MIT
+###############################################
+
+if [ $EUID -ne 0 ]; then
+   echo "This script must be run as root!"
+   exit 1
+fi
+
+version() {
+    echo "repack_ubi_image v1.0 by LimeOrangePie <ji5489@gmail.com>"
+}
+
+display_error() {
+    echo -e "Error: \e[31m$@\e[0m"
+    exit 1
+}
+
+display_info() {
+    echo -e "Info: \e[32m$@\e[0m"
+}
+
+check_args() {
+    if [[ -z "$@" ]] || [[ -z "$1" ]] || [[ -z "$2" ]]; then
+        display_error "Usage: ./repack_ubi_image rootfs-updated.ubifs userdatafs-updated.ubifs"
+    fi
+
+    if [ -z "`mount | grep rootfs.ubifs`" ]; then
+        display_error "Device Number not found!\n*** Please run this script after extracting image on same terminal ***"
+    fi
+}
+
+do_create_image() {
+    # [01] Create ubifs image based on current mountpoint
+    sync; sync; sync;
+    
+    display_info "Creating UBIfs image file"
+    mkfs.ubifs -m 2048 -e 126976 -c 144 -r /mnt/ubifs/rootfs.ubifs rootfs-tmp.ubifs.img
+    mkfs.ubifs -m 2048 -e 126976 -c 136 -r /mnt/ubifs/userdatafs.ubifs userdatafs-tmp.ubifs.img
+
+    # [02] Ubinize based on this image
+    display_info "Ubinizing images with config"
+    ubinize -v -p 131072 -m 2048 -o $1 config/ubinize-rootfs.ini
+    ubinize -v -p 131072 -m 2048 -o $2 config/ubinize-userdatafs.ini
+
+    display_info "Cleaning Up:"
+    rm -rf *-tmp.ubifs.img
+}
+
+version
+
+check_args $@
+do_create_image $@
+
+display_info "Image successfully created at below location:"
+ls -al | egrep "$1|$2"

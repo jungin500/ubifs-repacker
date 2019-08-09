@@ -1,0 +1,175 @@
+#!/bin/bash
+##############################################
+# Extract and mount UBI images based on
+# NAND flash memory structure of MiDrive D02
+# Tested and ran under OS (Ubuntu 18.04.2)
+#
+# Prerequisites: https://github.com/jrspruitt/ubi_reader
+#
+# @author LimeOrangePie <ji5489@gmail.com>
+# @date 2019-08-10
+# @license MIT
+###############################################
+
+if [ $EUID -ne 0 ]; then
+   echo "This script must be run as root!"
+   exit 1
+fi
+
+if [ -z "$MTDDEVNUM" ]; then
+    export MTDDEVNUM=0
+fi
+
+version() {
+    echo "mount_ubi_image v1.0 by LimeOrangePie <ji5489@gmail.com>"
+}
+
+display_error() {
+    echo -e "Error: \e[31m$@\e[0m"
+    exit 1
+}
+
+display_info() {
+    echo -e "Info: \e[32m$@\e[0m"
+}
+
+check_args() {
+    if [[ -z "$@" ]] || [[ -z "$1" ]] || [[ -z "$2" ]]; then
+        display_error "Usage: ./mount_ubi_image rootfs.ubifs userdatafs.ubifs"
+    fi
+
+    if [[ ! -f "$1" ]] || [[ ! -f "$2" ]]; then
+        display_error "Input file \"$1\" and/or \"$2\" does not exist! "
+    fi
+
+    if [[ -z "`file $1 | grep "UBI image"`" ]] || [[ -z "`file $2 | grep "UBI image"`" ]]; then
+        display_error "Input file \"$1\" and/or \"$2\" is NOT a UBI image (NOT an UBIfs image!)"
+    fi
+}
+
+# note that we use last one,
+# preventing existing devices to be manipulated
+check_devnum() {
+    display_info "Checking availabile MTD device number"
+    if [ ! -z "$MTDDEVNUM_STATIC" ]; then
+        display_info "Device number alreay checked!"
+    else
+        fr_beg=0
+        fr_end=16384
+        for ((i=fr_beg; i<=fr_end; i++)); do
+            if [ -f /dev/mtd$MTDDEVNUM ]; then
+                MTDDEVNUM=`expr $MTDDEVNUM + 1`
+            fi
+        done
+        
+        display_info "MTD Device Number: $MTDDEVNUM"
+        export MTDDEVNUM_STATIC=1
+    fi
+}
+
+# clear existing modules and unmount all ubi devices
+# CAUTION: May unmouting system and/or existing MTD devices!!
+clear_devnode() {
+    display_info "Cleaning up existing MTD device or modules"
+    mtddevices=(`mount | grep ubi | cut -d' ' -f1`)
+    sync; sync; sync;
+    for mountpoint in "${mtddevices[@]}"; do
+        umount $mountpoint
+    done
+    
+    rmmod ubifs
+    rmmod ubi
+    rmmod nandsim
+
+    if [ ! -z "$MTDDEVNUM_STATIC" ]; then
+        rm /dev/mtd$MTDDEVNMUM
+    fi
+}
+
+do_extract() {
+    # Extract UBI file and Write down
+    # EXTRACTED_PATH_ROOTFS, EXTRACTED_PATH_USERDATAFS
+    # for ubimkvol to mount its ubifs file
+    display_info "Extracting UBI image into UBIfs image"
+
+    mkdir tmp_rootfs/ tmp_userdatafs/
+    ubireader_extract_images -o tmp_rootfs/ $1
+    ubireader_extract_images -o tmp_userdatafs/ $2
+
+    pwd
+    echo "ubireader_extract_images -o tmp_rootfs/ $1"
+    echo "ubireader_extract_images -o tmp_userdatafs/ $2"
+
+    local EXTRACTED_FILENAME_ROOTFS=`ls -1 tmp_rootfs/$1`
+    local EXTRACTED_FILENAME_USERDATAFS=`ls -1 tmp_userdatafs/$2`
+
+    export EXTRACTED_PATH_ROOTFS="`pwd`/tmp_rootfs/$1/$EXTRACTED_FILENAME_ROOTFS"
+    export EXTRACTED_PATH_USERDATAFS="`pwd`/tmp_userdatafs/$2/$EXTRACTED_FILENAME_USERDATAFS"
+    display_info "Extraction complete:"
+    file $EXTRACTED_PATH_ROOTFS
+    file $EXTRACTED_PATH_USERDATAFS
+}
+
+cleanup_extract() {
+    display_info "Cleaning up extracted UBIfs images"
+    rm -rf tmp_rootfs
+    rm -rf tmp_userdatafs
+}
+
+do_mount() {
+    # [01] Load NAND Simulator module
+    modprobe nandsim first_id_byte=0x20 second_id_byte=0xa2 third_id_byte=0x00 fourth_id_byte=0x15 parts=8,8,32,32,8,8,8,160,64,152
+    
+    display_info "Displaying NAND simulator info:"
+    cat /proc/mtd
+    
+    export MTDDEVNUM_ROOTFS=`expr $MTDDEVNUM + 7`
+    export MTDDEVNUM_USERDATAFS=`expr $MTDDEVNUM + 9`
+    
+    # [02] Erase and get ready for reading ubifs image
+    display_info "Erasing nandsim flash memory"
+    
+    flash_erase /dev/mtd$MTDDEVNUM_ROOTFS 0 0
+    flash_erase /dev/mtd$MTDDEVNUM_USERDATAFS 0 0
+    
+    display_info "Formatting nandsim flash memory"
+    ubiformat /dev/mtd$MTDDEVNUM_ROOTFS -s 2048 -O 2048
+    ubiformat /dev/mtd$MTDDEVNUM_USERDATAFS -s 2048 -O 2048
+    
+    modprobe ubi
+    
+    # [03] Attach MTD devices to UBI devices
+    display_info "Attaching UBI devices"
+    display_info "Caution: it will try to attach at ubi0, ubi1, respectively."
+    ubiattach -m $MTDDEVNUM_ROOTFS -d 0 -O 2048
+    ubiattach -m $MTDDEVNUM_USERDATAFS -d 1 -O 2048
+    
+    display_info "Making UBI volume"
+    ubimkvol /dev/ubi0 -N rootfs.ubifs -m
+    ubimkvol /dev/ubi1 -N userdatafs.ubifs -m
+    
+    # [04] Copy ubifs image into created UBI volume
+    display_info "Copying UBIFS file into created volume"
+    ubiupdatevol /dev/ubi0_0 $EXTRACTED_PATH_ROOTFS
+    ubiupdatevol /dev/ubi1_0 $EXTRACTED_PATH_USERDATAFS
+    
+    # [05] Complete and mounting
+    mkdir -p /mnt/ubifs/rootfs.ubifs/
+    mkdir -p /mnt/ubifs/userdatafs.ubifs/
+    
+    mount /dev/ubi0_0 /mnt/ubifs/rootfs.ubifs
+    mount /dev/ubi1_0 /mnt/ubifs/userdatafs.ubifs
+}
+
+version
+
+check_args $@
+check_devnum
+clear_devnode
+
+do_extract $@
+do_mount
+cleanup_extract
+
+display_info "Extracted images and mounted succesfully at below location:"
+mount | grep ubi
