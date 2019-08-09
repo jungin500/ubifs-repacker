@@ -44,12 +44,14 @@ do_create_image() {
     sync; sync; sync;
     
     display_info "Creating UBIfs image file"
-    mkfs.ubifs -m 2048 -e 126976 -c 256 -r /mnt/ubifs/rootfs.ubifs rootfs-tmp.ubifs.img
-    mkfs.ubifs -m 2048 -e 126976 -c 128 -r /mnt/ubifs/userdatafs.ubifs userdatafs-tmp.ubifs.img
+    #mkfs.ubifs -m 2048 -e 126976 -c 256 -r /mnt/ubifs/rootfs.ubifs rootfs-tmp.ubifs.img
+    #mkfs.ubifs -m 2048 -e 126976 -c 128 -r /mnt/ubifs/userdatafs.ubifs userdatafs-tmp.ubifs.img
 
     # [**] Edit image UUID
-    printf '\x00\x00\x00\x00\x00\x00\x00\x08\x00\x00\x00\x00\x00\x00\x00\x01' | dd of=rootfs-tmp.ubifs.img bs=1 seek=108 count=16 conv=notrunc
-    printf '\x00\x00\x00\x00\x00\x00\x00\x08\x00\x00\x00\x00\x00\x00\x00\x01' | dd of=userdatafs-tmp.ubifs.img bs=1 seek=108 count=16 conv=notrunc
+    #printf '\x00\x00\x00\x00\x00\x00\x00\x08\x00\x00\x00\x00\x00\x00\x00\x01' | dd of=rootfs-tmp.ubifs.img bs=1 seek=108 count=16 conv=notrunc
+    #printf '\x00\x00\x00\x00\x00\x00\x00\x08\x00\x00\x00\x00\x00\x00\x00\x01' | dd of=userdatafs-tmp.ubifs.img bs=1 seek=108 count=16 conv=notrunc
+    dd if=/dev/ubi0_0 of=rootfs-tmp.ubifs.img bs=2048
+    dd if=/dev/ubi1_0 of=userdatafs-tmp.ubifs.img bs=2048
 
     # [02] Ubinize based on this image
     display_info "Ubinizing images with config"
